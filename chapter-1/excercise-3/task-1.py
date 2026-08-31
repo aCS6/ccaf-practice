@@ -5,11 +5,40 @@ from claude_agent_sdk import (
     AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
+    TextBlock,
     ToolResultBlock,
     UserMessage,
     query,
 )
 
+synthesis_agent = AgentDefinition(
+    description="Combines findings into a cited report",
+    prompt=(
+        "You are a synthesis agent. You receive a JSON list of findings, "
+        "each with claim, source_url, document_name, page_number, confidence, retrieved_by. "
+        "Write a report where every claim is followed by a citation "
+        "using source_url (if present) or document_name + page_number (if present). "
+        "Do not include any claim without a citation."
+    ),
+    tools=[]
+)
+
+async def run_synthesis(all_findings: list) -> str:
+    findings_json = json.dumps(all_findings)
+
+    report_text = ""
+    async for message in query(
+        prompt=f"Using synthesis_agent, write a cited report from these findings: {findings_json}",
+        options=options
+    ):
+        if not isinstance(message, AssistantMessage):
+            continue
+        for block in message.content:
+            if not isinstance(block, TextBlock):
+                continue
+            report_text += block.text
+
+    return report_text
 
 async def run_coordinator(user_query: str) -> list[dict]:
     all_findings = []
@@ -64,6 +93,7 @@ options = ClaudeAgentOptions(
     allowed_tools=["Task"],
     agents={
         "web_search_agent": web_search_agent,
-        "document_analysis_agent": document_analysis_agent
+        "document_analysis_agent": document_analysis_agent,
+        "synthesis_agent": synthesis_agent
     }
 )
