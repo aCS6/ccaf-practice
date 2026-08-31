@@ -114,7 +114,7 @@ def post_tool_use_hook(tool_name: str, raw_result: dict) -> dict:
         # Unix timestamp → ISO 8601
         normalised["created_at"] = datetime.fromtimestamp(
             created_at, tz=timezone.utc
-        ).isoformat()
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         print(f"  [HOOK] {tool_name}: Unix {created_at} → {normalised['created_at']}")
     elif isinstance(created_at, str) and "/" in created_at:
         # DD/MM/YYYY → ISO 8601
@@ -184,16 +184,12 @@ def run_agent(user_message: str) -> str:
 # ----- Smoke Test: PostToolUse Hook -----
 
 if __name__ == "__main__":
-    print("=== PostToolUse Hook Test ===\n")
 
-    test_cases = [
-        ("get_customer", fetch_customer("C-001")),
-        ("get_order",    fetch_order("ORD-42")),
-        ("get_shipment", fetch_shipment("SHP-7")),
-    ]
+    # Verify: model সব normalized data দেখছে কিনা
+    print("\n" + "="*60)
+    run_agent(
+        "Look up customer C-001, find their order ORD-42, "
+        "and check shipment SHP-7 status. "
+        "Summarise the dates and statuses you find."
+    )
 
-    for tool_name, raw in test_cases:
-        print(f"[RAW]        {tool_name}: {json.dumps(raw)}")
-        normalised = post_tool_use_hook(tool_name, raw)
-        print(f"[NORMALISED] {tool_name}: {json.dumps(normalised)}")
-        print()
