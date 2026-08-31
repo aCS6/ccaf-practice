@@ -12,3 +12,4 @@ wheels/
 
 # VS Code settings (local)
 .vscode/
+logs/
