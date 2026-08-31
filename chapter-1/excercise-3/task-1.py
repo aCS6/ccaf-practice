@@ -6,6 +6,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ToolResultBlock,
+    ToolUseBlock,
     UserMessage,
     query,
 )
@@ -45,11 +46,16 @@ async def run_synthesis(all_findings: list) -> list[dict]:
 
     return report_items
 
-async def run_coordinator(user_query: str) -> list[dict]:
+async def run_coordinator(user_query: str):
     all_findings = []
 
     async for message in query(
-        prompt=f"Research this using web_search_agent and document_analysis_agent: {user_query}",
+        prompt=(
+            f"Research this query: {user_query}\n"
+            "Spawn web_search_agent and document_analysis_agent as separate Task calls "
+            "in the same response, so they run in parallel. Do not wait for one before "
+            "starting the other — they are independent."
+        ),
         options=options
     ):
         if not isinstance(message, (AssistantMessage, UserMessage)):
@@ -109,3 +115,15 @@ def verify_citations(report_items: list[dict]) -> list[dict]:
         if not item.get("citation")
     ]
     return orphaned  # empty list = fully attributed
+
+def verify_parallel_spawn(messages: list) -> bool:
+    for message in messages:
+        if not isinstance(message, AssistantMessage):
+            continue
+        task_calls = [
+            b for b in message.content
+            if isinstance(b, ToolUseBlock) and b.name == "Task"
+        ]
+        if len(task_calls) >= 2:
+            return True  # both spawned in one turn
+    return False
