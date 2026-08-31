@@ -5,7 +5,6 @@ from claude_agent_sdk import (
     AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
-    TextBlock,
     ToolResultBlock,
     UserMessage,
     query,
@@ -16,29 +15,35 @@ synthesis_agent = AgentDefinition(
     prompt=(
         "You are a synthesis agent. You receive a JSON list of findings, "
         "each with claim, source_url, document_name, page_number, confidence, retrieved_by. "
-        "Write a report where every claim is followed by a citation "
-        "using source_url (if present) or document_name + page_number (if present). "
-        "Do not include any claim without a citation."
+        "Return a JSON list of report items. Each item must have: "
+        "statement (str) and citation (str, either source_url or 'document_name p.page_number'). "
+        "Every statement must have a non-empty citation."
     ),
     tools=[]
 )
 
-async def run_synthesis(all_findings: list) -> str:
+async def run_synthesis(all_findings: list) -> list[dict]:
     findings_json = json.dumps(all_findings)
 
-    report_text = ""
+    report_items = []
     async for message in query(
-        prompt=f"Using synthesis_agent, write a cited report from these findings: {findings_json}",
+        prompt=f"Using synthesis_agent, return cited report items as JSON from these findings: {findings_json}",
         options=options
     ):
-        if not isinstance(message, AssistantMessage):
+        if not isinstance(message, (AssistantMessage, UserMessage)):
             continue
         for block in message.content:
-            if not isinstance(block, TextBlock):
+            if not isinstance(block, ToolResultBlock):
                 continue
-            report_text += block.text
+            if not isinstance(block.content, str):
+                continue
+            report_items.extend(json.loads(block.content))
 
-    return report_text
+    orphaned = verify_citations(report_items)
+    if orphaned:
+        raise ValueError(f"{len(orphaned)} claims missing citation — metadata was likely stripped upstream")
+
+    return report_items
 
 async def run_coordinator(user_query: str) -> list[dict]:
     all_findings = []
@@ -97,3 +102,10 @@ options = ClaudeAgentOptions(
         "synthesis_agent": synthesis_agent
     }
 )
+
+def verify_citations(report_items: list[dict]) -> list[dict]:
+    orphaned = [
+        item for item in report_items
+        if not item.get("citation")
+    ]
+    return orphaned  # empty list = fully attributed
