@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import dataclass
 
@@ -127,3 +128,12 @@ def verify_parallel_spawn(messages: list) -> bool:
         if len(task_calls) >= 2:
             return True  # both spawned in one turn
     return False
+
+async def run_pipeline(user_query: str) -> list[dict]:
+    all_findings = await run_coordinator(user_query)
+    report_items = await run_synthesis(all_findings)
+    return report_items
+
+if __name__ == "__main__":
+    result = asyncio.run(run_pipeline("What are the effects of sleep deprivation on memory?"))
+    print(json.dumps(result, indent=2))
