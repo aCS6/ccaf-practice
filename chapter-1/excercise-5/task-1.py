@@ -58,6 +58,19 @@ tools: list[anthropic.types.ToolParam] = [
             "required": ["shipment_id"],
         },
     },
+    {
+        "name": "process_refund",
+        "description": "Process a refund for a customer.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "Customer ID"},
+                "amount": {"type": "number", "description": "Refund amount in USD"},
+            },
+            "required": ["customer_id", "amount"],
+        },
+    },
+
 ]
 
 # ----- Mock Tool Handlers (each uses a different format) -----
@@ -97,7 +110,36 @@ def execute_tool(name: str, tool_input: dict) -> str:
         return json.dumps(fetch_order(tool_input["order_id"]))
     if name == "get_shipment":
         return json.dumps(fetch_shipment(tool_input["shipment_id"]))
+    if name == "process_refund":
+        return json.dumps({
+            "status": "success",
+            "refund_id": f"REF-{tool_input['customer_id']}-{int(tool_input['amount'])}",
+            "amount": tool_input["amount"],
+        })
+
     return json.dumps({"error": f"Unknown tool: {name}"})
+
+# ----- PreToolUse Hook -----
+  
+def pre_tool_use_hook(tool_name: str, tool_input: dict) -> dict | None:
+    """
+    Runs BEFORE tool execution.
+    Returns a block result if the call should be prevented, None to allow.
+    """
+    if tool_name == "process_refund":
+        amount = tool_input.get("amount", 0)
+        if amount > 500:
+            ref = f"ESC-{int(amount)}-{tool_input.get('customer_id', 'UNKNOWN')}"
+            print(f"  [PRE-HOOK] process_refund BLOCKED — ${amount} exceeds $500 threshold")
+            return {
+                "blocked": True,
+                "message": (
+                    f"Refund of ${amount} exceeds the $500 automated threshold. "
+                    f"Redirecting to human escalation queue. Reference: {ref}"
+                ),
+            }
+    return None
+
 
 # ----- PostToolUse Hook -----
 
@@ -155,18 +197,25 @@ def run_agent(user_message: str) -> str:
             tool_results: list[anthropic.types.ToolResultBlockParam] = []
             for block in response.content:
                 if block.type == "tool_use":
-                    print(f"\n  [TOOL CALL] {block.name}({json.dumps(block.input)})")
-                    raw = json.loads(execute_tool(block.name, block.input))
+                      print(f"\n  [TOOL CALL] {block.name}({json.dumps(block.input)})")
+  
+                      # PreToolUse hook — block before execution if needed
+                      block_result = pre_tool_use_hook(block.name, block.input)
+                      if block_result:
+                          result_content = json.dumps(block_result)
+                          print(f"  [PRE-HOOK RESULT] {result_content}")
+                      else:
+                          raw = json.loads(execute_tool(block.name, block.input))
+                          normalised = post_tool_use_hook(block.name, raw)
+                          result_content = json.dumps(normalised)
+                          print(f"  [TOOL RESULT] {result_content}")
+  
+                      tool_results.append({
+                          "type": "tool_result",
+                          "tool_use_id": block.id,
+                          "content": result_content,
+                      })
 
-                    # PostToolUse hook — normalise before model sees it
-                    normalised = post_tool_use_hook(block.name, raw)
-
-                    print(f"  [TOOL RESULT] {json.dumps(normalised)}")
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(normalised),
-                    })
 
             messages.append({"role": "assistant", "content": response.content})
             messages.append({"role": "user", "content": tool_results})  # type: ignore[arg-type]
@@ -185,11 +234,12 @@ def run_agent(user_message: str) -> str:
 
 if __name__ == "__main__":
 
-    # Verify: model সব normalized data দেখছে কিনা
-    print("\n" + "="*60)
-    run_agent(
-        "Look up customer C-001, find their order ORD-42, "
-        "and check shipment SHP-7 status. "
-        "Summarise the dates and statuses you find."
-    )
+    # TEST-1: High refund — should be blocked by PreToolUse hook
+    print("🔴 TEST-1: Refund $750 (should be BLOCKED)")
+    run_agent("Process a refund of $750 for customer C-001.")
+
+    # TEST-2: Low refund — should pass through
+    print("\n🟢 TEST-2: Refund $200 (should be ALLOWED)")
+    run_agent("Process a refund of $200 for customer C-001.")
+
 
