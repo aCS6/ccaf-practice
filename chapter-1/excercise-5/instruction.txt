@@ -1,0 +1,162 @@
+STEP-1
+Create an agent with three MCP tools that return data in different formats: Tool A returns Unix timestamps and numeric status codes, Tool B returns ISO 8601 dates and string statuses, Tool C returns DD/MM/YYYY dates and single-character status codes
+
+Why: This recreates the data format chaos example from the exam. Without normalisation, the model must interpret three different date formats and three different status representations, leading to inconsistent parsing across iterations.
+
+You should see: Three tool implementations that each return data with distinct date and status formats. Tool A uses epoch seconds and numeric codes, Tool B uses ISO strings and English statuses, Tool C uses DD/MM/YYYY and single characters.
+Nudge
+
+Each tool should return a structured object with at least a date field and a status field, but in its own format.
+Guidance
+
+Define three mock tool handlers that return objects with created_at and status fields, each using a different format convention for both fields.
+Starter Code
+
+function toolAHandler(): Record<string, unknown> {
+  return { customer_id: "C-001", created_at: 1710489600, status: 200 };
+}
+function toolBHandler(): Record<string, unknown> {
+  return { order_id: "ORD-42", created_at: "2024-03-15T12:00:00Z", status: "active" };
+}
+function toolCHandler(): Record<string, unknown> {
+  return { shipment_id: "SHP-7", created_at: "15/03/2024", status: "S" };
+}
+
+
+STEP-2
+Implement a PostToolUse hook that intercepts all tool results and normalises dates to ISO 8601 format and status codes to human-readable English strings
+
+Why: PostToolUse hooks run after execution but before the model processes the result. This is the correct hook direction for data normalisation — the exam tests whether you know that PostToolUse transforms data after execution, not before.
+
+You should see: A hook function that detects the format of each field and converts it: Unix timestamps to ISO 8601, DD/MM/YYYY to ISO 8601, numeric status codes to English strings, and single-character codes to full words.
+Nudge
+
+PostToolUse hooks receive the tool result and return a transformed version. What transformations do you need for each format?
+Guidance
+
+Detect format by type checking: if date is a number, treat as Unix timestamp. If it matches DD/MM/YYYY pattern, parse accordingly. Map numeric statuses (200 = active) and character statuses (S = shipped, P = pending).
+Starter Code
+
+const postToolUseHook = (toolName: string, result: Record<string, unknown>) => {
+  const normalised = { ...result };
+  // Normalise dates
+  if (typeof result.created_at === "number") {
+    normalised.created_at = new Date(result.created_at * 1000).toISOString();
+  } else if (typeof result.created_at === "string" && result.created_at.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+    const [day, month, year] = result.created_at.split("/");
+    normalised.created_at = new Date(`${year}-${month}-${day}`).toISOString();
+  }
+  // Normalise status
+  const statusMap: Record<string, string> = { "200": "active", "404": "not_found", "S": "shipped", "P": "pending" };
+  if (statusMap[String(result.status)]) {
+    normalised.status = statusMap[String(result.status)];
+  }
+  return normalised;
+};
+
+STEP-3
+Verify the model receives consistent data by testing with queries that require results from all three tools
+
+Why: Consistent data eliminates interpretation errors. Without normalisation, the model might confuse day/month order in DD/MM/YYYY or misinterpret status code P as processed instead of pending. Verification proves the hook works across all tool outputs.
+
+You should see: Three tool results that all use ISO 8601 dates and English status strings, regardless of which tool produced them. The model response should reference dates and statuses consistently without confusion.
+Nudge
+
+Run a query that forces all three tools to be called. Check that the model sees normalised data, not raw formats.
+Guidance
+
+Send a prompt that asks about a customer, their order, and the shipment status. Inspect the data the model receives after the PostToolUse hook processes each result.
+Starter Code
+
+const testPrompt = "Look up customer C-001, find their order ORD-42, and check shipment SHP-7 status.";
+const response = await runAgentWithHooks(testPrompt);
+// Inspect hook output logs:
+// Tool A: created_at should be "2024-03-15T12:00:00.000Z" not 1710489600
+// Tool C: status should be "shipped" not "S"
+console.log("All dates ISO 8601:", hookOutputs.every(o => o.created_at.includes("T")));
+console.log("All statuses readable:", hookOutputs.every(o => typeof o.status === "string" && o.status.length > 1));
+
+STEP-4
+Add a PreToolUse hook that blocks process_refund when the amount exceeds $500 and redirects to a human escalation workflow
+
+Why: A PreToolUse hook runs before execution — the refund never processes. The exam specifically warns against using PostToolUse for blocking, because by that point the action has already occurred. Pre-execution interception is the only correct hook direction for policy enforcement.
+
+You should see: A pre-execution hook that inspects process_refund calls, checks the amount parameter, and blocks the call with a redirect message if the amount exceeds 500. The refund tool never executes for blocked calls.
+Nudge
+
+Which hook direction blocks actions before they happen? What happens to the tool call when it is blocked?
+Guidance
+
+Use a PreToolUse hook (pre-execution). Check if the tool name is process_refund and the amount exceeds 500. If so, return a block result instead of allowing execution.
+Starter Code
+
+const toolCallInterceptor = (toolName: string, input: Record<string, unknown>) => {
+  if (toolName === "process_refund" && (input.amount as number) > 500) {
+    return {
+      blocked: true,
+      message: "Refund exceeds $500 threshold. Redirecting to human escalation queue. Reference: ESC-" + Date.now()
+    };
+  }
+  return { blocked: false };
+};
+
+STEP-5
+Add a second PreToolUse hook that blocks transfer_funds until aml_check has returned a pass result in the current session
+
+Why: This is the AML compliance scenario from the exam. Prompt instructions achieve 95% compliance, but regulatory requirements demand 100%. The hook provides deterministic enforcement that no prompt can match — a single missed AML check can result in legal penalties.
+
+You should see: A pre-execution hook that checks session state for a completed AML check before allowing transfer_funds to execute. Without a prior passing aml_check, the transfer is blocked with a descriptive error.
+Nudge
+
+How do you track whether aml_check has passed? You need session-scoped state, similar to the prerequisite gate pattern.
+Guidance
+
+Maintain a session state variable that records AML check results. The interception hook for transfer_funds checks this state. If no passing AML check exists, block the transfer.
+Starter Code
+
+const amlState = { passed: false };
+
+const amlInterceptor = (toolName: string, input: Record<string, unknown>) => {
+  if (toolName === "aml_check") {
+    // Allow execution; PostToolUse hook records the result
+    return { blocked: false };
+  }
+  if (toolName === "transfer_funds" && !amlState.passed) {
+    return {
+      blocked: true,
+      message: "COMPLIANCE BLOCK: International transfer requires AML verification. Run aml_check first."
+    };
+  }
+  return { blocked: false };
+};
+// In PostToolUse hook for aml_check:
+// if (result.status === "pass") amlState.passed = true;
+
+STEP-6
+Test both hooks by attempting to trigger the blocked operations and verify they are prevented before execution
+
+Why: Testing confirms that the hooks provide deterministic enforcement. The key verification is that blocked tools never execute — the hook prevents the call, not just logs a warning after the fact.
+
+You should see: Both blocked operations return interception messages without the underlying tool executing. After satisfying prerequisites (completing AML check, reducing refund amount), the operations succeed.
+Nudge
+
+Test the negative case (blocked) and the positive case (allowed) for each hook. What should you check to confirm the tool never executed?
+Guidance
+
+For each hook, first attempt the operation without satisfying the prerequisite. Verify it is blocked. Then satisfy the prerequisite and retry. Verify it succeeds. Check that no side effects occurred during the blocked attempt.
+Starter Code
+
+// Test refund threshold
+let result = await callTool("process_refund", { customer_id: "C-001", amount: 750 });
+console.log("Blocked high refund:", result.blocked === true);
+
+result = await callTool("process_refund", { customer_id: "C-001", amount: 200 });
+console.log("Allowed low refund:", result.blocked === false);
+
+// Test AML prerequisite
+result = await callTool("transfer_funds", { to: "IBAN-123", amount: 10000 });
+console.log("Blocked without AML:", result.blocked === true);
+
+await callTool("aml_check", { customer_id: "C-001" });
+result = await callTool("transfer_funds", { to: "IBAN-123", amount: 10000 });
+console.log("Allowed after AML:", result.blocked === false);
