@@ -262,20 +262,53 @@ if __name__ == "__main__":
     #     "Look up customer john@example.com and process a refund of $150 for order ORD-12345."
     # )
 
-    print("\n" + "🟡 TEST-3: Escalation to Human Agent".center(60, "="))
-    session_state["verified_customer_id"] = None  # fresh session
-    run_agent(
-          "I need to return order ORD-12345, but the system keeps showing an error "
-          "and I cannot complete the return. My email is john@example.com. "
-          "Please escalate this to a human agent if you cannot fix it.",
-          system=(
-              "You are a customer support agent. "
-              "If you cannot resolve an issue, you MUST call the escalate_to_human tool. "
-              "Do not just say you will escalate — actually call the tool."
-          )
-      )
+    # print("\n" + "🟡 TEST-3: Escalation to Human Agent".center(60, "="))
+    # session_state["verified_customer_id"] = None  # fresh session
+    # run_agent(
+    #       "I need to return order ORD-12345, but the system keeps showing an error "
+    #       "and I cannot complete the return. My email is john@example.com. "
+    #       "Please escalate this to a human agent if you cannot fix it.",
+    #       system=(
+    #           "You are a customer support agent. "
+    #           "If you cannot resolve an issue, you MUST call the escalate_to_human tool. "
+    #           "Do not just say you will escalate — actually call the tool."
+    #       )
+    #   )
 
 
+    # TEST-4: Multi-concern — তিনটা আলাদা issue একসাথে
+    print("\n" + "🔵 TEST-4: Multi-Concern Handoff".center(60, "="))
+    session_state["verified_customer_id"] = None
+    result = run_agent(
+        "My email is john@example.com. "
+        "I need to return order ORD-789, "
+        "dispute a charge of $45.00 on my last bill, "
+        "and update my shipping address to 123 New Street. "
+        "Please handle all of these.",
+        system=(
+            "You are a customer support agent. "
+            "When a customer has multiple concerns, identify and address ALL of them. "
+            "If you cannot fully resolve all issues, call escalate_to_human with a summary "
+            "that covers every concern — return, billing dispute, and address update. "
+            "Do not omit any concern from the handoff summary."
+        )
+    )
+  
+    # Verify handoff covers all 3 concerns
+    print("\n" + "="*60)
+    print("VERIFICATION — All 3 concerns in handoff?")
+    result_lower = result.lower()
+    checks = {
+        "return":   "return"   in result_lower,
+        "dispute":  "dispute"  in result_lower or "billing" in result_lower or "charge" in result_lower,
+        "address":  "address"  in result_lower or "shipping" in result_lower,
+    }
+    for concern, found in checks.items():
+        status = "✅" if found else "❌"
+        print(f"  {status} {concern}")
+
+    all_covered = all(checks.values())
+    print(f"\n  All concerns covered: {'✅ YES' if all_covered else '❌ NO'}")
 
     # Gate status summary
     print("\n" + "="*60)
