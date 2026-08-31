@@ -1,6 +1,7 @@
 class ResearchCoordinator:
-    def __init__(self):
+    def __init__(self, max_iterations: int = 5):
         self.role = "orchestrating hub"
+        self.max_iterations = max_iterations
 
     def decompose(self, topic: str) -> list:
         subtopics = [
@@ -26,32 +27,39 @@ class ResearchCoordinator:
     def evaluate_coverage(self, subtopics: list, findings: dict) -> dict:
         coverage = {}
         for st in subtopics:
-            if findings.get(st):
-                coverage[st] = "well-covered"
-            else:
-                coverage[st] = "missing"
+            coverage[st] = "well-covered" if findings.get(st) else "missing"
         return coverage
 
     def run(self, topic: str) -> dict:
         goal = f"Produce a comprehensive research report on {topic}"
         subtopics = self.decompose(topic)
+        findings = {}
 
-        assigned = subtopics[:2]
-        web_prompt = self.build_subagent_prompt(assigned[0], topic, goal)
-        doc_prompt = self.build_subagent_prompt(assigned[1], topic, goal)
+        iteration = 0
+        while iteration < self.max_iterations:
+            coverage = self.evaluate_coverage(subtopics, findings)
+            missing = [st for st, status in coverage.items() if status == "missing"]
 
-        findings = {
-            assigned[0]: self.call_web_search_agent(web_prompt),
-            assigned[1]: self.call_document_agent(doc_prompt)
-        }
+            if not missing:
+                break  # coverage complete, stop looping
+
+            # Re-delegate missing subtopics (alternate between the two agents)
+            for i, st in enumerate(missing):
+                prompt = self.build_subagent_prompt(st, topic, goal)
+                if i % 2 == 0:
+                    findings[st] = self.call_web_search_agent(prompt)
+                else:
+                    findings[st] = self.call_document_agent(prompt)
+
+            iteration += 1
 
         coverage = self.evaluate_coverage(subtopics, findings)
-
         report = {
             "topic": topic,
             "subtopics": subtopics,
             "findings": findings,
-            "coverage": coverage
+            "coverage": coverage,
+            "iterations_used": iteration
         }
         return report
 
