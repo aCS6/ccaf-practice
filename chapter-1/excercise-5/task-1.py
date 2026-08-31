@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 
 import anthropic
 from dotenv import load_dotenv
@@ -11,6 +12,15 @@ client = anthropic.Anthropic(
     base_url=os.environ.get("ANTHROPIC_BASE_URL"),
 )
 MODEL = "claude-opus-4-8"
+
+STATUS_MAP = {
+    "200": "active",
+    "404": "not_found",
+    "500": "error",
+    "S":   "shipped",
+    "P":   "pending",
+    "C":   "cancelled",
+}
 
 # ----- Tool Definitions -----
 
@@ -89,13 +99,101 @@ def execute_tool(name: str, tool_input: dict) -> str:
         return json.dumps(fetch_shipment(tool_input["shipment_id"]))
     return json.dumps({"error": f"Unknown tool: {name}"})
 
-# ----- Smoke Test -----
+# ----- PostToolUse Hook -----
+
+def post_tool_use_hook(tool_name: str, raw_result: dict) -> dict:
+    """
+    Intercepts tool results before the model sees them.
+    Normalises created_at → ISO 8601, status → human-readable English.
+    """
+    normalised = raw_result.copy()
+
+    # Normalise date
+    created_at = raw_result.get("created_at")
+    if isinstance(created_at, int):
+        # Unix timestamp → ISO 8601
+        normalised["created_at"] = datetime.fromtimestamp(
+            created_at, tz=timezone.utc
+        ).isoformat()
+        print(f"  [HOOK] {tool_name}: Unix {created_at} → {normalised['created_at']}")
+    elif isinstance(created_at, str) and "/" in created_at:
+        # DD/MM/YYYY → ISO 8601
+        dt = datetime.strptime(created_at, "%d/%m/%Y")
+        normalised["created_at"] = dt.strftime("%Y-%m-%dT00:00:00Z")
+        print(f"  [HOOK] {tool_name}: DD/MM/YYYY {created_at} → {normalised['created_at']}")
+
+    # Normalise status
+    status_key = str(raw_result.get("status", ""))
+    if status_key in STATUS_MAP:
+        normalised["status"] = STATUS_MAP[status_key]
+        print(f"  [HOOK] {tool_name}: status {status_key!r} → {normalised['status']!r}")
+
+    return normalised
+
+# ----- Agent Runner -----
+
+MAX_ITERATIONS = 20
+
+def run_agent(user_message: str) -> str:
+    print(f"\n{'='*60}")
+    print(f"USER: {user_message}")
+    print(f"{'='*60}")
+
+    messages: list[anthropic.types.MessageParam] = [
+        {"role": "user", "content": user_message}
+    ]
+
+    for _ in range(MAX_ITERATIONS):
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            tools=tools,
+            messages=messages,
+        )
+
+        if response.stop_reason == "tool_use":
+            tool_results: list[anthropic.types.ToolResultBlockParam] = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    print(f"\n  [TOOL CALL] {block.name}({json.dumps(block.input)})")
+                    raw = json.loads(execute_tool(block.name, block.input))
+
+                    # PostToolUse hook — normalise before model sees it
+                    normalised = post_tool_use_hook(block.name, raw)
+
+                    print(f"  [TOOL RESULT] {json.dumps(normalised)}")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(normalised),
+                    })
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})  # type: ignore[arg-type]
+
+        else:
+            final_text = next(
+                (block.text for block in response.content if block.type == "text"),
+                ""
+            )
+            print(f"\nASSISTANT: {final_text}")
+            return final_text
+
+    return "Stopped: safety cap reached"
+
+# ----- Smoke Test: PostToolUse Hook -----
 
 if __name__ == "__main__":
-    print("=== Raw Tool Outputs (before normalisation) ===\n")
-    print("get_customer:")
-    print(json.dumps(fetch_customer("C-001"), indent=2))
-    print("\nget_order:")
-    print(json.dumps(fetch_order("ORD-42"), indent=2))
-    print("\nget_shipment:")
-    print(json.dumps(fetch_shipment("SHP-7"), indent=2))
+    print("=== PostToolUse Hook Test ===\n")
+
+    test_cases = [
+        ("get_customer", fetch_customer("C-001")),
+        ("get_order",    fetch_order("ORD-42")),
+        ("get_shipment", fetch_shipment("SHP-7")),
+    ]
+
+    for tool_name, raw in test_cases:
+        print(f"[RAW]        {tool_name}: {json.dumps(raw)}")
+        normalised = post_tool_use_hook(tool_name, raw)
+        print(f"[NORMALISED] {tool_name}: {json.dumps(normalised)}")
+        print()
