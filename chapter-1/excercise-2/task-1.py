@@ -63,5 +63,16 @@ class ResearchCoordinator:
         }
         return report
 
-r = ResearchCoordinator().run("renewable energy")
-print(r)
+coordinator = ResearchCoordinator()
+report = coordinator.run("renewable energy technologies")
+
+print("Subtopics:", report["subtopics"])
+print("Coverage:", report["coverage"])
+print("Iterations used:", report["iterations_used"])
+
+# Assertion to confirm full coverage
+expected = {"solar", "wind", "geothermal", "tidal", "biomass", "fusion"}
+covered = {st for st, status in report["coverage"].items() if status == "well-covered"}
+
+assert expected.issubset(covered), f"Missing: {expected - covered}"
+print("✅ Full coverage achieved")
