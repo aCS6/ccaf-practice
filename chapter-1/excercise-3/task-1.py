@@ -1,7 +1,35 @@
+import json
 from dataclasses import dataclass
 
-from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, query
+from claude_agent_sdk import (
+    AgentDefinition,
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ToolResultBlock,
+    UserMessage,
+    query,
+)
 
+
+async def run_coordinator(user_query: str) -> list[dict]:
+    all_findings = []
+
+    async for message in query(
+        prompt=f"Research this using web_search_agent and document_analysis_agent: {user_query}",
+        options=options
+    ):
+        if not isinstance(message, (AssistantMessage, UserMessage)):
+            continue
+        for block in message.content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+            if not isinstance(block.content, str):
+                continue
+
+            findings = json.loads(block.content)
+            all_findings.extend(findings)
+
+    return all_findings
 
 @dataclass
 class Finding:
