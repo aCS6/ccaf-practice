@@ -70,12 +70,13 @@ def run_query(query: str, tools: list[anthropic.types.ToolParam]) -> str | None:
         model=MODEL,
         max_tokens=1024,
         tools=tools,
+        tool_choice={"type": "any"},  # force model to pick a tool
         messages=[{"role": "user", "content": query}],
     )
     for block in response.content:
         if block.type == "tool_use":
             return block.name
-    return None  # model chose not to use a tool
+    return None
 
 def test_tool_selection(
     tools: list[anthropic.types.ToolParam],
@@ -161,3 +162,23 @@ IMPROVED_TOOLS: list[anthropic.types.ToolParam] = [
 if __name__ == "__main__":
     # Step-2: test with ambiguous descriptions
     ambiguous_results = test_tool_selection(AMBIGUOUS_TOOLS, "STEP-2: AMBIGUOUS DESCRIPTIONS")
+
+    # Step-4: re-run with improved descriptions and compare
+    improved_results = test_tool_selection(IMPROVED_TOOLS, "STEP-4: IMPROVED DESCRIPTIONS")
+
+    # Before / After comparison table
+    print(f"\n{'='*65}")
+    print("STEP-4: BEFORE vs AFTER COMPARISON")
+    print(f"{'='*65}")
+    print(f"  {'BEFORE':<10} {'AFTER':<10} QUERY")
+    print(f"  {'-'*60}")
+    for before, after in zip(ambiguous_results, improved_results):
+        b = "✅" if before["correct"] else f"❌ {before['selected'] or 'none'}"
+        a = "✅" if after["correct"] else f"❌ {after['selected'] or 'none'}"
+        print(f"  {b:<10} {a:<10} {before['query']}")
+
+    before_acc = sum(r["correct"] for r in ambiguous_results)
+    after_acc  = sum(r["correct"] for r in improved_results)
+    print(f"\n  Accuracy before: {before_acc}/10 ({before_acc*10}%)")
+    print(f"  Accuracy after:  {after_acc}/10  ({after_acc*10}%)")
+    print(f"  Improvement:     +{after_acc - before_acc} queries correct")
