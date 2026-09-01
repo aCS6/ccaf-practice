@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import anthropic
@@ -52,22 +53,74 @@ def single_pass_review(codebase: dict[str, str]) -> str:
         (block.text for block in response.content if block.type == "text"), ""
     )
 
+
+def per_file_review(codebase: dict[str, str]) -> dict[str, list[dict]]:
+    """
+    Review each file individually — every file gets full attention budget.
+    Returns structured results: {filename: [{"line": n, "severity": "...", "description": "..."}]}
+    """
+    results: dict[str, list[dict]] = {}
+
+    for filename, content in codebase.items():
+        print(f"  Reviewing {filename}...")
+
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Review this Python file for bugs, style issues, and security vulnerabilities. "
+                    f"For each issue found, respond with one line in this exact format:\n"
+                    f"LINE <n> [<severity>]: <description>\n\n"
+                    f"Severity must be one of: critical, high, medium, low.\n"
+                    f"If no issues, write: no issues found.\n\n"
+                    f"=== {filename} ===\n{content}"
+                ),
+            }],
+        )
+
+        raw = next(
+            (block.text for block in response.content if block.type == "text"), ""
+        )
+
+        # Parse: LINE 3 [critical]: SQL injection
+        issues: list[dict] = []
+        for line in raw.splitlines():
+            match = re.match(
+                r"LINE\s+(\d+)\s+\[(\w+)\]:\s+(.+)", line.strip(), re.IGNORECASE
+            )
+            if match:
+                issues.append({
+                    "line":        int(match.group(1)),
+                    "severity":    match.group(2).lower(),
+                    "description": match.group(3).strip(),
+                })
+
+        results[filename] = issues
+
+    return results
+
 # ----- Smoke Test -----
 
 if __name__ == "__main__":
     sample_dir = Path(__file__).parent / "sample_code"
     codebase = load_codebase(str(sample_dir))
 
+    # Single-pass
     print("\n" + "="*60)
-    print("SINGLE-PASS REVIEW — Raw Response")
+    print("SINGLE-PASS REVIEW")
     print("="*60)
-    raw_review = single_pass_review(codebase)
-    print(raw_review)
+    single_raw = single_pass_review(codebase)
+    print(single_raw)
 
-    # Record issue counts per file by counting mentions
+    # Per-file
     print("\n" + "="*60)
-    print("ISSUE MENTION COUNT PER FILE (attention dilution indicator)")
+    print("PER-FILE REVIEW")
     print("="*60)
-    for filename in codebase:
-        count = raw_review.lower().count(filename.lower())
-        print(f"  {filename}: mentioned {count} time(s)")
+    per_file_results = per_file_review(codebase)
+    for filename, issues in per_file_results.items():
+        print(f"  {filename}: {len(issues)} issues found")
+        for issue in issues:
+            print(f"    line {issue['line']} [{issue['severity']}]: {issue['description']}")
+
