@@ -101,6 +101,55 @@ def per_file_review(codebase: dict[str, str]) -> dict[str, list[dict]]:
 
     return results
 
+
+# ----- Cross-File Integration Pass -----
+  
+def cross_file_pass(
+    codebase: dict[str, str],
+    per_file_results: dict[str, list[dict]],
+) -> str:
+    """
+    Takes per-file summaries + file structure and checks for cross-cutting concerns:
+    - Inconsistent API usage across files
+    - Data flow issues between modules
+    - Same pattern handled differently in different files
+    """
+    # Build a compact summary of per-file findings
+    summary = "\n".join(
+        f"{filename}: {len(issues)} issues — "
+        + ("; ".join(i["description"] for i in issues) if issues else "no issues")
+        for filename, issues in per_file_results.items()
+    )
+
+    # Build a simple import/dependency graph from source
+    import_graph: dict[str, list[str]] = {}
+    for filename, content in codebase.items():
+        imports = re.findall(r"^(?:import|from)\s+([\w.]+)", content, re.MULTILINE)
+        import_graph[filename] = imports
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        messages=[{
+            "role": "user",
+            "content": (
+                "You are doing a cross-file integration review. "
+                "Based on the per-file summaries and import graph below, identify:\n"
+                "1. Data flow issues between modules\n"
+                "2. Inconsistent API usage across files\n"
+                "3. Same pattern handled differently in different files\n"
+                "4. Security issues that span multiple files\n\n"
+                f"Per-file summaries:\n{summary}\n\n"
+                f"Import graph:\n{import_graph}\n\n"
+                "List each cross-file issue clearly, referencing the specific files involved."
+            ),
+        }],
+    )
+
+    return next(
+        (block.text for block in response.content if block.type == "text"), ""
+    )
+
 # ----- Smoke Test -----
 
 if __name__ == "__main__":
@@ -108,11 +157,11 @@ if __name__ == "__main__":
     codebase = load_codebase(str(sample_dir))
 
     # Single-pass
-    print("\n" + "="*60)
-    print("SINGLE-PASS REVIEW")
-    print("="*60)
-    single_raw = single_pass_review(codebase)
-    print(single_raw)
+    # print("\n" + "="*60)
+    # print("SINGLE-PASS REVIEW")
+    # print("="*60)
+    # single_raw = single_pass_review(codebase)
+    # print(single_raw)
 
     # Per-file
     print("\n" + "="*60)
@@ -123,4 +172,12 @@ if __name__ == "__main__":
         print(f"  {filename}: {len(issues)} issues found")
         for issue in issues:
             print(f"    line {issue['line']} [{issue['severity']}]: {issue['description']}")
+
+    # Cross-file
+    print("\n" + "="*60)
+    print("CROSS-FILE INTEGRATION PASS")
+    print("="*60)
+    cross_file_result = cross_file_pass(codebase, per_file_results)
+    print(cross_file_result)
+
 
