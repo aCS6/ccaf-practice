@@ -160,10 +160,10 @@ IMPROVED_TOOLS: list[anthropic.types.ToolParam] = [
 
 
 if __name__ == "__main__":
-    # Step-2: test with ambiguous descriptions
+    # Step-2: ambiguous descriptions baseline
     ambiguous_results = test_tool_selection(AMBIGUOUS_TOOLS, "STEP-2: AMBIGUOUS DESCRIPTIONS")
 
-    # Step-4: re-run with improved descriptions and compare
+    # Step-4: improved descriptions
     improved_results = test_tool_selection(IMPROVED_TOOLS, "STEP-4: IMPROVED DESCRIPTIONS")
 
     # Before / After comparison table
@@ -182,3 +182,44 @@ if __name__ == "__main__":
     print(f"\n  Accuracy before: {before_acc}/10 ({before_acc*10}%)")
     print(f"  Accuracy after:  {after_acc}/10  ({after_acc*10}%)")
     print(f"  Improvement:     +{after_acc - before_acc} queries correct")
+
+    # Step-5: system prompt conflict test
+    CONFLICTING_PROMPT = "Always check customer details before proceeding with any request."
+
+    print(f"\n{'='*65}")
+    print("STEP-5: SYSTEM PROMPT CONFLICT TEST")
+    print(f"{'='*65}")
+    print(f"  System prompt: \"{CONFLICTING_PROMPT}\"\n")
+    print(f"  {'WITH PROMPT':<14} {'WITHOUT PROMPT':<16} QUERY")
+    print(f"  {'-'*60}")
+
+    conflict_correct = 0
+    for query, expected in QUERIES:
+        response_with = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            tools=IMPROVED_TOOLS,
+            tool_choice={"type": "any"},
+            system=CONFLICTING_PROMPT,
+            messages=[{"role": "user", "content": query}],
+        )
+        selected_with = next(
+            (b.name for b in response_with.content if b.type == "tool_use"), None
+        )
+        baseline = next(r for r in improved_results if r["query"] == query)
+        selected_without = baseline["selected"]
+
+        is_correct = selected_with == expected
+        if is_correct:
+            conflict_correct += 1
+
+        conflict = " ⚠️  CONFLICT" if selected_with != selected_without else ""
+        status = "✅" if is_correct else "❌"
+        print(f"  {status} {(selected_with or 'none'):<12}  {(selected_without or 'none'):<14}  {query}{conflict}")
+
+    print(f"\n  Accuracy with system prompt:    {conflict_correct}/10 ({conflict_correct*10}%)")
+    print(f"  Accuracy without system prompt: {after_acc}/10 ({after_acc*10}%)")
+    print()
+    print("  ⚠️  CONFLICT = system prompt keyword caused a different tool selection.")
+    print("  Fix: replace 'check customer details' with neutral phrasing like")
+    print("  'gather relevant information' to avoid unintended tool associations.")
