@@ -108,6 +108,56 @@ def test_tool_selection(
     return results
 
 
+# ----- Step-3: Improved Tool Definitions -----
+# Purpose, input formats, examples, edge cases, explicit boundaries
+
+IMPROVED_TOOLS: list[anthropic.types.ToolParam] = [
+    {
+        "name": "get_customer",
+        "description": (
+            "Looks up a customer account by email address, phone number, or customer ID. "
+            "Returns customer profile including name, contact details, account status, and loyalty tier. "
+            "Use this when the query is about WHO the customer is — verifying identity, checking account standing, "
+            "or retrieving profile details. "
+            "Accepted formats: email (e.g. john@example.com), phone (e.g. 555-0123), or customer ID (e.g. CUST-001). "
+            "Do NOT use for order-specific queries such as tracking, delivery status, or refund eligibility — "
+            "use lookup_order for those."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "identifier": {
+                    "type": "string",
+                    "description": "Customer email, phone number, or customer ID",
+                }
+            },
+            "required": ["identifier"],
+        },
+    },
+    {
+        "name": "lookup_order",
+        "description": (
+            "Looks up an order by order number and returns order details including status, items, "
+            "delivery estimate, tracking information, and refund eligibility. "
+            "Use this when the query is about a specific order — tracking a package, checking delivery, "
+            "asking about refunds, or getting order status. "
+            "Accepted formats: order number with or without hash (e.g. #12345 or 12345). "
+            "Do NOT use for customer account or profile queries — use get_customer for those."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "identifier": {
+                    "type": "string",
+                    "description": "Order number, e.g. #12345 or 12345",
+                }
+            },
+            "required": ["identifier"],
+        },
+    },
+]
+
+
 if __name__ == "__main__":
     # Step-2: test with ambiguous descriptions
     ambiguous_results = test_tool_selection(AMBIGUOUS_TOOLS, "STEP-2: AMBIGUOUS DESCRIPTIONS")
