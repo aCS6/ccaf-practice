@@ -21,9 +21,7 @@ AMBIGUOUS_TOOLS: list[anthropic.types.ToolParam] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "identifier": {
-                    "type": "string",
-                }
+                "identifier": {"type": "string"}
             },
             "required": ["identifier"],
         },
@@ -34,9 +32,7 @@ AMBIGUOUS_TOOLS: list[anthropic.types.ToolParam] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "identifier": {
-                    "type": "string",
-                }
+                "identifier": {"type": "string"}
             },
             "required": ["identifier"],
         },
@@ -52,12 +48,66 @@ def handle_tool(name: str, identifier: str) -> str:
         return f"Order details for: {identifier}"
     return "Unknown tool"
 
+# ----- Step-2: Test Harness -----
 
-# ----- Smoke Test -----
+# Expected correct tool for each query
+QUERIES: list[tuple[str, str]] = [
+    ("What is the status of order #12345?",          "lookup_order"),
+    ("Look up customer john@example.com",             "get_customer"),
+    ("Check my order tracking",                       "lookup_order"),
+    ("Find the account for phone 555-0123",           "get_customer"),
+    ("Where is my package?",                          "lookup_order"),
+    ("Is order #67890 eligible for a refund?",        "lookup_order"),
+    ("What loyalty tier is this customer?",           "get_customer"),
+    ("I need details on order #11111",                "lookup_order"),
+    ("Verify the customer account status",            "get_customer"),
+    ("When will order #99999 arrive?",                "lookup_order"),
+]
+
+def run_query(query: str, tools: list[anthropic.types.ToolParam]) -> str | None:
+    """Send a single query and return the tool name selected by the model."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        tools=tools,
+        messages=[{"role": "user", "content": query}],
+    )
+    for block in response.content:
+        if block.type == "tool_use":
+            return block.name
+    return None  # model chose not to use a tool
+
+def test_tool_selection(
+    tools: list[anthropic.types.ToolParam],
+    label: str,
+) -> list[dict]:
+    """Run all 10 queries and log results. Returns result dicts for comparison."""
+    print(f"\n{'='*65}")
+    print(f"{label}")
+    print(f"{'='*65}")
+    print(f"  {'RESULT':<8} {'SELECTED':<16} {'EXPECTED':<16} QUERY")
+    print(f"  {'-'*60}")
+
+    results = []
+    correct = 0
+    for query, expected in QUERIES:
+        selected = run_query(query, tools)
+        is_correct = selected == expected
+        if is_correct:
+            correct += 1
+        status = "✅" if is_correct else "❌"
+        print(f"  {status:<8} {(selected or 'none'):<16} {expected:<16} {query}")
+        results.append({
+            "query":    query,
+            "expected": expected,
+            "selected": selected,
+            "correct":  is_correct,
+        })
+
+    print(f"\n  Accuracy: {correct}/{len(QUERIES)} ({correct/len(QUERIES)*100:.0f}%)")
+    return results
+
 
 if __name__ == "__main__":
-    print("=== Ambiguous Tool Definitions ===\n")
-    for tool in AMBIGUOUS_TOOLS:
-        print(f"  Tool: {tool['name']}")
-        print(f"  Description: {tool['description']}")
-        print()
+    # Step-2: test with ambiguous descriptions
+    ambiguous_results = test_tool_selection(AMBIGUOUS_TOOLS, "STEP-2: AMBIGUOUS DESCRIPTIONS")
