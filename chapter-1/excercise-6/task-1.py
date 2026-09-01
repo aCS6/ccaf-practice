@@ -199,6 +199,65 @@ def compare_results(
     print("Lower std dev = more consistent analysis across files.")
     print("Higher total in per-file = fewer issues missed due to attention dilution.")
 
+# ----- Contradiction Detection -----
+
+def find_contradictions(
+    codebase: dict[str, str],
+    single_raw: str,
+    per_file_results: dict[str, list[dict]],
+) -> None:
+    """
+    Find cases where the same code pattern appears in multiple files
+    but single-pass flagged it in one file and missed it in another.
+    """
+    import re
+
+    # Patterns that appear in multiple sample files
+    shared_patterns = {
+        "sql_injection":    r'f".*(?:SELECT|INSERT|DELETE|UPDATE).*\{',
+        "hardcoded_secret": r'(?:PASSWORD|KEY|SECRET|URL)\s*=\s*["\']',
+        "append_loop":      r'results\.append\(',
+    }
+
+    print(f"{'PATTERN':<20} {'FILES WITH CODE':>30}  {'FLAGGED IN SINGLE-PASS'}")
+    print("-" * 80)
+
+    for pattern_name, regex in shared_patterns.items():
+        # which files contain this pattern in source code
+        files_with_pattern = [
+            fname for fname, content in codebase.items()
+            if re.search(regex, content, re.IGNORECASE)
+        ]
+
+        if len(files_with_pattern) < 2:
+            continue
+
+        # which of those files were mentioned in single-pass with this pattern
+        flagged: list[str] = []
+        not_flagged: list[str] = []
+        for fname in files_with_pattern:
+            section_match = re.search(
+                rf"##\s*{re.escape(fname)}(.*?)(?=##|\Z)",
+                single_raw,
+                re.DOTALL | re.IGNORECASE,
+            )
+            section_text = section_match.group(1) if section_match else ""
+            keyword = pattern_name.replace("_", " ").split()[0]  # e.g. "sql", "hardcoded", "append"
+            if keyword.lower() in section_text.lower():
+                flagged.append(fname)
+            else:
+                not_flagged.append(fname)
+
+        files_str = ", ".join(files_with_pattern)
+        flagged_str = ", ".join(flagged) if flagged else "none"
+        print(f"  {pattern_name:<18} {files_str:>30}  flagged: {flagged_str}")
+        if not_flagged:
+            print(f"  {'':18} {'':>30}  missed:  {', '.join(not_flagged)}  ← CONTRADICTION")
+
+    print()
+    print("CONTRADICTION = same pattern in code, inconsistent evaluation by single-pass.")
+    print("Per-file pass evaluates each file independently — no contradictions possible.")
+
 # ----- Smoke Test -----
 
 if __name__ == "__main__":
@@ -234,6 +293,12 @@ if __name__ == "__main__":
       print("COMPARISON: SINGLE-PASS vs MULTI-PASS")
       print("="*60)
       compare_results(codebase, single_raw, per_file_results)
+
+      # Contradiction detection
+      print("\n" + "="*60)
+      print("CONTRADICTION DETECTION")
+      print("="*60)
+      find_contradictions(codebase, single_raw, per_file_results)
 
 
 
