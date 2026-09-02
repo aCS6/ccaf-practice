@@ -1,0 +1,194 @@
+# STEP: 1
+-------
+
+Create an MCP tool that queries a mock customer database with simulated failure modes
+
+Why: Simulating failure modes in a controlled environment lets you observe how agents behave when errors lack structure. The exam tests your understanding of how poor error responses cause wasted retries and incorrect escalations.
+
+You should see: An MCP server running with a customer_lookup tool that accepts a customer identifier and a failure_mode parameter to trigger specific error conditions on demand.
+Nudge
+
+Design the tool to accept two parameters: an identifier for the customer lookup and a mode parameter that controls which failure scenario to simulate.
+Guidance
+
+Use the MCP SDK McpServer class. Define input parameters with enum values for the failure modes so you can trigger each scenario predictably.
+Starter Code
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+const server = new McpServer({ name: "customer-db", version: "1.0.0" });
+server.tool("customer_lookup",
+  "Looks up a customer by email or ID. Supports failure simulation via mode parameter.",
+  {
+    identifier: z.string().describe("Customer email or ID"),
+    mode: z.enum(["success", "not_found", "timeout", "invalid", "business", "permission"]).default("success")
+  },
+  async ({ identifier, mode }) => {
+    // Implementation in next steps
+    return { content: [{ type: "text", text: `Mode: ${mode}` }] };
+  }
+);
+
+# STEP: 2
+-------
+
+Implement four error response types: transient (simulated timeout), validation (invalid input format), business (refund exceeds policy limit), and permission (access denied)
+
+Why: Each error category demands a different recovery strategy. The exam tests whether you can identify which category an error belongs to and what recovery action is appropriate. Transient errors are retryable; business errors never are.
+
+You should see: Four distinct error responses, each with isError: true, a specific errorCategory value, the correct isRetryable boolean, and a descriptive message explaining what went wrong and what to do next.
+Nudge
+
+Only transient errors get isRetryable: true — resending the identical call can work. Validation, business and permission are all false, because something has to change first. errorCategory is what tells the agent which recovery to run.
+Guidance
+
+Each error response should include three metadata fields beyond the MCP standard: errorCategory (string), isRetryable (boolean), and description (string with recovery guidance).
+Starter Code
+
+if (mode === "timeout") {
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      errorCategory: "transient",
+      isRetryable: true,
+      description: "Customer database timed out after 5 seconds. The request is valid and should succeed on retry."
+    }) }]
+  };
+}
+if (mode === "invalid") {
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      errorCategory: "validation",
+      isRetryable: false,
+      description: `Invalid identifier format: ${identifier}. Expected email (user@domain.com) or ID (CUST-NNNNN). Correct the format and call again.`
+    }) }]
+  };
+}
+if (mode === "business") {
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      errorCategory: "business",
+      isRetryable: false,
+      description: "Refund of \u00a3750 exceeds the \u00a3500 automatic limit. Escalate to a manager with refund details."
+    }) }]
+  };
+}
+if (mode === "permission") {
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      errorCategory: "permission",
+      isRetryable: false,
+      description: "Current service account lacks access to financial records. Escalate to a senior agent."
+    }) }]
+  };
+}
+
+# STEP: 3
+-------
+
+Include structured metadata in each error: errorCategory, isRetryable boolean, and a human-readable description
+
+Why: Structured metadata is what enables intelligent recovery. Without these fields, the agent cannot distinguish a transient timeout from a permanent policy violation. The exam specifically tests whether you know that isRetryable: false means the agent must take an alternative path, not retry.
+
+You should see: Each error response parses to a JSON object containing exactly three fields: errorCategory (one of transient, validation, business, permission), isRetryable (boolean), and description (a sentence explaining the error and suggesting recovery).
+Nudge
+
+Verify your responses by parsing them with JSON.parse() — if any field is missing or the wrong type, the agent recovery logic will break.
+Guidance
+
+Create a helper function that builds the error response structure consistently, ensuring every error includes all three metadata fields.
+Starter Code
+
+function buildErrorResponse(category: string, retryable: boolean, description: string) {
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      errorCategory: category,
+      isRetryable: retryable,
+      description: description
+    }) }]
+  };
+}
+
+# STEP: 4
+-------
+
+Implement a valid empty result response (isError: false, resultCount: 0) clearly distinguished from an access failure
+
+Why: This is one of the most critical distinctions in Domain 2. Confusing access failures with valid empty results causes wasted retries and incorrect escalations. The exam tests this directly — an agent retrying a successful empty query is the canonical anti-pattern.
+
+You should see: Two structurally different responses: a valid empty result with isError: false and resultCount: 0 (indicating the query ran successfully but found nothing), and an access failure with isError: true, errorCategory: transient, and isRetryable: true.
+Nudge
+
+The key difference is isError. A valid empty result is NOT an error — the tool succeeded. An access failure IS an error — the tool could not execute the query.
+Guidance
+
+Compare the two side by side: the empty result should explicitly state the query executed successfully, whilst the access failure should state the query did not execute.
+Starter Code
+
+if (mode === "not_found") {
+  return {
+    isError: false,
+    content: [{ type: "text", text: JSON.stringify({
+      resultCount: 0,
+      message: `No customer found matching ${identifier}. The query executed successfully but returned no matches.`
+    }) }]
+  };
+}
+// Compare with the timeout (access failure):
+if (mode === "timeout") {
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      errorCategory: "transient",
+      isRetryable: true,
+      description: "Connection timed out. The query did not execute."
+    }) }]
+  };
+}
+
+# STEP: 5
+-------
+
+Write an agent loop that reads the error metadata and takes appropriate action: retry for transient, fix input for validation, escalate for business, and request credentials for permission
+
+Why: The agent loop demonstrates the practical outcome of structured error metadata. Each error category maps to a specific recovery action, and the loop must branch correctly. This is exactly the kind of decision logic the exam expects you to design.
+
+You should see: An agent loop that parses the error metadata, branches on errorCategory, retries transient errors up to 3 times with backoff, reformats input for validation errors, escalates business errors to a human, and requests elevated credentials for permission errors.
+Nudge
+
+Use isRetryable to decide whether resending the identical call is worth attempting at all, then branch on errorCategory for the actual recovery. Do not treat isRetryable: false as a stop signal — validation lands there and the agent recovers on its own.
+Guidance
+
+Implement exponential backoff for transient retries (e.g. 1s, 2s, 4s) and cap retries at 3. For validation, rebuild the arguments from the description and issue a fresh call. For business and permission, log the escalation path and stop.
+Starter Code
+
+async function handleToolResult(result: any) {
+  if (!result.isError) {
+    const data = JSON.parse(result.content[0].text);
+    if (data.resultCount === 0) {
+      console.log("Valid empty result — no matches found. Do NOT retry.");
+      return;
+    }
+    console.log("Success:", data);
+    return;
+  }
+  const error = JSON.parse(result.content[0].text);
+  switch (error.errorCategory) {
+  case "transient":
+      console.log("Retrying after delay...");
+      break;
+    case "validation":
+      console.log("Fixing input format and retrying...");
+      break;
+    case "business":
+      console.log("Escalating to human agent:", error.description);
+      break;
+    case "permission":
+      console.log("Requesting elevated credentials...");
+      break;
+  }
+}
