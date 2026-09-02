@@ -100,32 +100,71 @@ def handle_permission() -> dict:
         ),
     )
 
+# ----- Step-4: Valid Empty Result vs Access Failure -----
+
+def handle_not_found(identifier: str) -> dict:
+    """
+    Valid empty result — query executed successfully but found no matches.
+    isError: False  →  do NOT retry, do NOT escalate.
+    """
+    return {
+        "isError":     False,
+        "resultCount": 0,
+        "message":     (
+            f"No customer found matching '{identifier}'. "
+            "The query executed successfully but returned no matches."
+        ),
+    }
+
+def handle_success(identifier: str) -> dict:
+    """Successful lookup — returns mock customer profile."""
+    return {
+        "isError":     False,
+        "resultCount": 1,
+        "customer": {
+            "id":     "CUST-001",
+            "email":  identifier,
+            "name":   "John Doe",
+            "status": "active",
+            "tier":   "gold",
+        },
+    }
+
 # ----- customer_lookup: Dictionary Dispatch -----
 
 def customer_lookup(identifier: str, mode: FailureMode = "success") -> dict:
     """Mock customer database lookup with simulated failure modes."""
-    default_response = lambda: {"isError": False, "identifier": identifier, "mode": mode}
-
     mode_mapper = {
+        "success":    lambda: handle_success(identifier),
+        "not_found":  lambda: handle_not_found(identifier),
         "timeout":    handle_timeout,
         "invalid":    lambda: handle_invalid(identifier),
         "business":   handle_business,
         "permission": handle_permission,
     }
-
-    return mode_mapper.get(mode, default_response)()
+    return mode_mapper[mode]()
 
 # ----- Smoke Test -----
 
 if __name__ == "__main__":
-    print("=== Step-3: Structured Metadata Helper ===\n")
-    modes: list[FailureMode] = ["timeout", "invalid", "business", "permission"]
-    for mode in modes:
+    print("=== Step-4: Valid Empty Result vs Access Failure ===\n")
+
+    not_found = customer_lookup("ghost@example.com", "not_found")
+    timeout   = customer_lookup("ghost@example.com", "timeout")
+
+    print("[not_found] — valid empty result (isError: False)")
+    print(json.dumps(not_found, indent=2))
+    print(f"  → isError: {not_found['isError']}  | should retry? NO\n")
+
+    print("[timeout] — access failure (isError: True)")
+    print(json.dumps(timeout, indent=2))
+    print(f"  → isError: {timeout['isError']}  | should retry? {timeout['isRetryable']}\n")
+
+    print("=== All modes ===\n")
+    all_modes: list[FailureMode] = ["success", "not_found", "timeout", "invalid", "business", "permission"]
+    for mode in all_modes:
         result = customer_lookup("john@example.com", mode)
-        print(f"[{mode}]")
-        print(json.dumps(result, indent=2))
-        # verify all three required fields are present
-        assert "errorCategory" in result, f"Missing errorCategory in {mode}"
-        assert "isRetryable"   in result, f"Missing isRetryable in {mode}"
-        assert "description"   in result, f"Missing description in {mode}"
-        print("  ✅ all metadata fields present\n")
+        is_err = result["isError"]
+        retryable = result.get("isRetryable", "n/a")
+        category  = result.get("errorCategory", "—")
+        print(f"  [{mode:<12}] isError={str(is_err):<5}  isRetryable={str(retryable):<5}  category={category}")
