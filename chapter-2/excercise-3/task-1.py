@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 
 import anthropic
 from dotenv import load_dotenv
@@ -331,6 +332,80 @@ def run_document_analysis_agent(document_id: str, user_query: str) -> list[dict]
     return tool_call_log
 
 
+# ----- Step-4: Constrained load_document (replaces generic fetch_page) -----
+# Applies least privilege — only accepts validated document URLs.
+# Rejects arbitrary URLs that don't match document patterns or trusted domains.
+
+VALID_EXTENSIONS = {".pdf", ".docx", ".md", ".txt", ".html"}
+TRUSTED_DOMAINS  = {"docs.internal.com", "wiki.company.com", "specs.example.org"}
+
+def validate_document_url(url: str) -> tuple[bool, str]:
+    """
+    Returns (is_valid, error_message).
+    Valid = URL has a document extension AND comes from a trusted domain.
+    """
+    try:
+        parsed = urlparse(url)
+        ext    = os.path.splitext(parsed.path)[1].lower()
+        domain = parsed.hostname or ""
+
+        if ext not in VALID_EXTENSIONS:
+            return False, (
+                f"Rejected: '{url}' has unsupported extension '{ext}'. "
+                f"Allowed: {', '.join(sorted(VALID_EXTENSIONS))}."
+            )
+        if domain not in TRUSTED_DOMAINS:
+            return False, (
+                f"Rejected: '{domain}' is not a trusted domain. "
+                f"Allowed: {', '.join(sorted(TRUSTED_DOMAINS))}."
+            )
+        return True, ""
+    except Exception as e:
+        return False, f"Invalid URL: {e}"
+
+
+def load_document_handler(url: str) -> dict:
+    """Mock handler for load_document — validates URL before fetching."""
+    is_valid, error = validate_document_url(url)
+    if not is_valid:
+        return {"isError": True, "message": error}
+    return {
+        "isError":  False,
+        "url":      url,
+        "content":  f"[Mock document content from {url}]",
+        "size_kb":  42,
+    }
+
+
+LOAD_DOCUMENT_TOOL: anthropic.types.ToolParam = {
+    "name": "load_document",
+    "description": (
+        "Loads a document from a validated URL. "
+        "Only accepts URLs ending in .pdf, .docx, .md, .txt, or .html "
+        "from trusted domains (docs.internal.com, wiki.company.com, specs.example.org). "
+        "Use instead of fetch_page for document retrieval. "
+        "Rejects arbitrary or untrusted URLs with a clear error."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Document URL — must be a document file from a trusted domain",
+            },
+        },
+        "required": ["url"],
+    },
+}
+
+# Replace fetch_page with load_document in web_search agent
+WEB_SEARCH_TOOLS[:] = [
+    LOAD_DOCUMENT_TOOL if t["name"] == "fetch_page" else t
+    for t in WEB_SEARCH_TOOLS
+]
+AGENT_TOOLSETS["web_search"]["tools"] = WEB_SEARCH_TOOLS
+
+
 if __name__ == "__main__":
     print("=== Step-1 & 2: Agent Tool Scoping ===\n")
     for agent_name, config in AGENT_TOOLSETS.items():
@@ -362,3 +437,17 @@ if __name__ == "__main__":
     first_tool = log[0]["tool"] if log else "none"
     print(f"\n  First tool called: {first_tool}")
     print(f"  {'✅' if first_tool == 'extract_metadata' else '❌'} extract_metadata was {'enforced' if first_tool == 'extract_metadata' else 'NOT enforced'} as first step.")
+
+    print("\n=== Step-4: Constrained load_document URL Validation ===\n")
+    test_urls = [
+        "https://docs.internal.com/specs/mcp-v2.pdf",       # ✅ valid
+        "https://wiki.company.com/guide.md",                 # ✅ valid
+        "https://evil.com/malware.pdf",                      # ❌ untrusted domain
+        "https://docs.internal.com/page",                    # ❌ no extension
+        "https://docs.internal.com/data.csv",                # ❌ unsupported extension
+    ]
+    for url in test_urls:
+        result = load_document_handler(url)
+        status = "✅" if not result["isError"] else "❌"
+        msg = result.get("content", result.get("message", ""))
+        print(f"  {status} {url}\n     → {msg}\n")
