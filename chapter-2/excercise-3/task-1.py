@@ -227,21 +227,54 @@ AGENT_TOOLSETS: dict[str, dict] = {
 }
 
 
+# ----- Step-2: Scoped verify_fact added to synthesis agent -----
+# Handles simple single-source lookups during report compilation.
+# Complex multi-source verifications → escalate to coordinator.
+
+SCOPED_VERIFY_FACT: anthropic.types.ToolParam = {
+    "name": "verify_fact",
+    "description": (
+        "Verifies a simple factual claim against a single source document. "
+        "Use for quick checks during report compilation (e.g. confirming a date, name, or figure). "
+        "Only handles single-source simple lookups — do NOT use for claims requiring "
+        "cross-referencing multiple sources or deep analysis. "
+        "For complex multi-source verifications, escalate to the coordinator."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "claim":     {"type": "string", "description": "The factual claim to verify"},
+            "source_id": {"type": "string", "description": "ID of the single source document to check against"},
+        },
+        "required": ["claim", "source_id"],
+    },
+}
+
+SYNTHESIS_TOOLS.append(SCOPED_VERIFY_FACT)
+AGENT_TOOLSETS["synthesis"]["tools"] = SYNTHESIS_TOOLS
+
+
 if __name__ == "__main__":
-    print("=== Step-1: Agent Tool Scoping ===\n")
-    all_tool_names: list[str] = []
+    print("=== Step-1 & 2: Agent Tool Scoping ===\n")
     for agent_name, config in AGENT_TOOLSETS.items():
         tools = config["tools"]
         names = [t["name"] for t in tools]
-        all_tool_names.extend(names)
         print(f"[{agent_name}] — {config['role']}")
         for name in names:
-            print(f"  • {name}")
+            scope = " (scoped cross-role)" if name == "verify_fact" else ""
+            print(f"  • {name}{scope}")
         print(f"  Total: {len(tools)} tools\n")
 
-    # verify no tool appears in more than one agent
-    duplicates = [n for n in all_tool_names if all_tool_names.count(n) > 1]
+    # verify no unintended cross-role duplicates
+    # (verify_fact is intentionally scoped to synthesis only)
+    all_names: list[str] = [
+        t["name"]
+        for config in AGENT_TOOLSETS.values()
+        for t in config["tools"]
+        if t["name"] != "verify_fact"  # scoped tool is exempt
+    ]
+    duplicates = {n for n in all_names if all_names.count(n) > 1}
     if duplicates:
-        print(f"⚠️  Cross-role duplicates found: {set(duplicates)}")
+        print(f"⚠️  Unexpected cross-role duplicates: {duplicates}")
     else:
-        print("✅ No cross-role tool duplicates — scoping is clean.")
+        print("✅ No unintended cross-role tool duplicates — scoping is clean.")
