@@ -254,6 +254,83 @@ SYNTHESIS_TOOLS.append(SCOPED_VERIFY_FACT)
 AGENT_TOOLSETS["synthesis"]["tools"] = SYNTHESIS_TOOLS
 
 
+# ----- Step-3: Forced tool_choice on document analysis agent -----
+# First turn: force extract_metadata as mandatory first step.
+# Subsequent turns: auto so model picks appropriate analysis tool.
+
+def mock_tool_result(name: str, tool_input: dict) -> str:
+    """Return mock results for document analysis tools."""
+    if name == "extract_metadata":
+        return '{"title": "MCP Specification v2.1", "author": "MCP Working Group", "date": "2024-03-15", "type": "technical_spec"}'
+    if name == "extract_data_points":
+        return '{"versions": ["2.0", "2.1"], "release_date": "2024-03-15", "breaking_changes": 3}'
+    if name == "summarise_content":
+        return '{"summary": "MCP v2.1 introduces tool scoping, structured errors, and multi-agent coordination primitives."}'
+    if name == "verify_claim":
+        return '{"supported": true, "evidence": "Section 4.2 confirms tool scoping was added in v2.1"}'
+    return '{"result": "ok"}'
+
+
+def run_document_analysis_agent(document_id: str, user_query: str) -> list[dict]:
+    """
+    Document analysis agent loop with forced extract_metadata on first turn.
+    Returns list of tool calls made during the session.
+    """
+    print(f"\n  Analysing document: {document_id}")
+    tool_call_log: list[dict] = []
+
+    messages: list[anthropic.types.MessageParam] = [
+        {"role": "user", "content": f"{user_query}\n\nDocument ID: {document_id}"}
+    ]
+
+    is_first_turn = True
+
+    while True:
+        # First turn: force extract_metadata — mandatory workflow step
+        # Subsequent turns: auto — model picks the right analysis tool
+        tool_choice: anthropic.types.ToolChoiceParam = (
+            {"type": "tool", "name": "extract_metadata"}
+            if is_first_turn
+            else {"type": "auto"}
+        )
+
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            tools=DOCUMENT_ANALYSIS_TOOLS,
+            tool_choice=tool_choice,
+            messages=messages,
+        )
+
+        if response.stop_reason == "tool_use":
+            is_first_turn = False
+            tool_results: list[anthropic.types.ToolResultBlockParam] = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = mock_tool_result(block.name, block.input)
+                    forced = " [FORCED]" if block.name == "extract_metadata" and len(tool_call_log) == 0 else ""
+                    print(f"    [TOOL]{forced} {block.name}({block.input})")
+                    tool_call_log.append({"agent": "document_analysis", "tool": block.name})
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})  # type: ignore[arg-type]
+
+        elif response.stop_reason == "end_turn":
+            final = next((b.text for b in response.content if b.type == "text"), "")
+            print(f"    [DONE] {final[:120]}")
+            break
+        else:
+            print(f"    [WARN] stop_reason={response.stop_reason}")
+            break
+
+    return tool_call_log
+
+
 if __name__ == "__main__":
     print("=== Step-1 & 2: Agent Tool Scoping ===\n")
     for agent_name, config in AGENT_TOOLSETS.items():
@@ -265,16 +342,23 @@ if __name__ == "__main__":
             print(f"  • {name}{scope}")
         print(f"  Total: {len(tools)} tools\n")
 
-    # verify no unintended cross-role duplicates
-    # (verify_fact is intentionally scoped to synthesis only)
     all_names: list[str] = [
         t["name"]
         for config in AGENT_TOOLSETS.values()
         for t in config["tools"]
-        if t["name"] != "verify_fact"  # scoped tool is exempt
+        if t["name"] != "verify_fact"
     ]
     duplicates = {n for n in all_names if all_names.count(n) > 1}
     if duplicates:
         print(f"⚠️  Unexpected cross-role duplicates: {duplicates}")
     else:
         print("✅ No unintended cross-role tool duplicates — scoping is clean.")
+
+    print("\n=== Step-3: Forced extract_metadata on Document Analysis Agent ===")
+    log = run_document_analysis_agent(
+        document_id="doc-mcp-spec-v2",
+        user_query="Analyse this document and extract key data points and a summary.",
+    )
+    first_tool = log[0]["tool"] if log else "none"
+    print(f"\n  First tool called: {first_tool}")
+    print(f"  {'✅' if first_tool == 'extract_metadata' else '❌'} extract_metadata was {'enforced' if first_tool == 'extract_metadata' else 'NOT enforced'} as first step.")
