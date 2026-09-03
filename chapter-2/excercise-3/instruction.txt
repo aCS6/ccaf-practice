@@ -1,0 +1,187 @@
+# STEP : 1
+-----
+
+Design three agent roles (web search, document analysis, synthesis) and assign 4-5 tools to each, scoped to its role
+
+Why: Tool overload degrades selection reliability. The exam tests the principle that each agent should have 4-5 tools scoped to its specific role. Giving a single agent 18 tools is a known anti-pattern that causes misrouting.
+
+You should see: A configuration object or table listing three agents, each with exactly 4-5 tools. No tool appears in more than one agent role (except scoped cross-role tools added later). Tool names clearly indicate their purpose and scope.
+Nudge
+
+Ask yourself for each tool: does this belong to web search, document analysis, or synthesis? If a tool could fit two roles, it probably needs to be split or scoped.
+Guidance
+
+Map tools to roles: Web Search gets search_web, fetch_page, extract_links, save_snippet. Document Analysis gets extract_metadata, extract_data_points, summarise_content, verify_claim. Synthesis gets compile_report, format_citation, assess_coverage.
+Starter Code
+
+const agentToolsets = {
+  webSearch: {
+    role: "Finds and retrieves web content",
+    tools: [
+      { name: "search_web", description: "Searches the web for a query and returns ranked results" },
+      { name: "fetch_page", description: "Fetches the full content of a web page by URL" },
+      { name: "extract_links", description: "Extracts all hyperlinks from a web page" },
+      { name: "save_snippet", description: "Saves a text snippet with source URL for later use" }
+    ]
+  },
+  documentAnalysis: {
+    role: "Analyses document structure and content",
+    tools: [
+      { name: "extract_metadata", description: "Extracts title, author, date, and document type" },
+      { name: "extract_data_points", description: "Extracts structured data fields (dates, amounts, names)" },
+      { name: "summarise_content", description: "Produces a concise summary of key arguments" },
+      { name: "verify_claim", description: "Checks if a claim is supported by the source document" }
+    ]
+  },
+  synthesis: {
+    role: "Compiles findings into reports",
+    tools: [
+      { name: "compile_report", description: "Assembles research findings into a structured report" },
+      { name: "format_citation", description: "Formats a source reference in the required citation style" },
+      { name: "assess_coverage", description: "Evaluates whether all research questions have been addressed" }
+    ]
+  }
+};
+
+# STEP : 2
+-----
+
+
+Add a scoped verify_fact tool to the synthesis agent that handles simple lookups directly
+
+Why: Routing every fact verification through the coordinator adds 2-3 round trips and up to 40% latency. The exam tests the scoped cross-role tool pattern — give the agent a constrained version of a capability for the 85% simple case, routing only complex cases to the coordinator.
+
+You should see: A verify_fact tool added to the synthesis agent toolset with a description that explicitly limits it to simple single-source lookups and states that complex multi-source verifications should be escalated to the coordinator.
+Nudge
+
+The scoped tool should have clear boundaries — it handles simple lookups only. Include an explicit boundary in the description about when to escalate to the coordinator instead.
+Guidance
+
+Define the tool with parameters for the claim to verify and the source to check against. The description should state it handles single-source simple lookups and not multi-source cross-referencing.
+Starter Code
+
+// Add to synthesis agent tools
+const scopedVerifyFact = {
+  name: "verify_fact",
+  description: "Verifies a simple factual claim against a single source document. Use for quick checks during report compilation. For complex verifications requiring multiple sources or cross-referencing, escalate to the coordinator.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      claim: { type: "string", description: "The factual claim to verify" },
+      sourceId: { type: "string", description: "ID of the source document to check against" }
+    },
+    required: ["claim", "sourceId"]
+  }
+};
+agentToolsets.synthesis.tools.push(scopedVerifyFact);
+
+# STEP : 3
+-----
+
+
+Configure tool_choice forced selection on the document analysis agent to ensure extract_metadata runs as the mandatory first step
+
+Why: Forced selection enforces workflow ordering. The exam tests your knowledge of all three tool_choice modes: auto lets the model choose freely, any guarantees a tool call, and forced selection guarantees a specific tool call. This prevents the model from skipping mandatory steps.
+
+You should see: A document analysis agent configuration where the first API call uses tool_choice with type: tool and name: extract_metadata, and subsequent calls switch to tool_choice: auto for the remaining analysis steps.
+Nudge
+
+Forced selection applies only to the first turn. After extract_metadata completes, switch to auto so the model can choose the appropriate analysis tool for subsequent steps.
+Guidance
+
+Set tool_choice to { type: "tool", name: "extract_metadata" } for the first message, then change to { type: "auto" } for follow-up messages in the agent loop.
+Starter Code
+
+// First turn: forced selection
+const firstTurn = await client.messages.create({
+  model: "claude-sonnet-5",
+  max_tokens: 1024,
+  tools: agentToolsets.documentAnalysis.tools,
+  tool_choice: { type: "tool", name: "extract_metadata" },
+  messages: [{ role: "user", content: "Analyse this document: ..." }]
+});
+// Subsequent turns: auto selection
+const nextTurn = await client.messages.create({
+  model: "claude-sonnet-5",
+  max_tokens: 1024,
+  tools: agentToolsets.documentAnalysis.tools,
+  tool_choice: { type: "auto" },
+  messages: [...previousMessages]
+});
+
+# STEP : 4
+-----
+
+
+Replace a generic fetch_url tool with a constrained load_document that validates document URLs only
+
+Why: This applies the principle of least privilege to tool design. A generic fetch_url tool can fetch anything from anywhere, enabling misuse. A constrained load_document that validates URLs prevents the agent from fetching arbitrary resources. The exam tests this pattern directly.
+
+You should see: A load_document tool definition that includes URL validation logic (checking for document file extensions or trusted domains) and rejects non-document URLs with a clear error message.
+Nudge
+
+Think about what makes a URL a document URL — file extensions like .pdf, .docx, .md, or specific trusted domains. The tool should reject anything outside these patterns.
+Guidance
+
+Implement a URL validation function that checks the URL against an allowlist of document patterns. Return a structured error if the URL does not match.
+Starter Code
+
+const loadDocument = {
+  name: "load_document",
+  description: "Loads a document from a validated URL. Only accepts URLs ending in .pdf, .docx, .md, .txt, or .html from trusted domains. Use instead of fetch_url for document retrieval.",
+  handler: async ({ url }: { url: string }) => {
+    const validExtensions = [".pdf", ".docx", ".md", ".txt", ".html"];
+    const trustedDomains = ["docs.internal.com", "wiki.company.com"];
+    const parsed = new URL(url);
+    const hasValidExt = validExtensions.some(ext => parsed.pathname.endsWith(ext));
+    const isTrusted = trustedDomains.includes(parsed.hostname);
+    if (!hasValidExt || !isTrusted) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Rejected: ${url} is not a valid document URL. Must be a document file from a trusted domain.` }]
+      };
+    }
+    // Fetch and return document content
+    return { content: [{ type: "text", text: `Document content from ${url}` }] };
+  }
+};
+
+# STEP : 5
+-----
+
+
+Test with a query that requires all three agents and verify that no cross-role tool misuse occurs
+
+Why: End-to-end testing validates that your tool distribution works in practice. Cross-role misuse — such as a synthesis agent running its own web searches instead of using provided results — is a common failure the exam expects you to prevent through proper scoping.
+
+You should see: A test run log showing: the web search agent using only its tools, the document analysis agent starting with extract_metadata (forced), and the synthesis agent using compile_report plus verify_fact for simple checks. No agent calls a tool outside its assigned set.
+Nudge
+
+Run a query like "Research the latest MCP specification changes and compile a summary report" — this naturally requires all three agent roles.
+Guidance
+
+Log every tool call with the agent name and tool name. After the run, verify that each tool call came from the correct agent. Any cross-role calls indicate a scoping problem.
+Starter Code
+
+async function runMultiAgentQuery(query: string) {
+  const log: Array<{ agent: string; tool: string }> = [];
+  // Simulate coordinator dispatching to agents
+  for (const [agentName, config] of Object.entries(agentToolsets)) {
+    const response = await client.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 1024,
+      tools: config.tools, // Only this agent's tools
+      messages: [{ role: "user", content: query }]
+    });
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        log.push({ agent: agentName, tool: block.name });
+      }
+    }
+  }
+  // Verify no cross-role usage
+  for (const entry of log) {
+    const agentTools = agentToolsets[entry.agent].tools.map(t => t.name);
+    console.log(`${entry.agent}: ${entry.tool} — ${agentTools.includes(entry.tool) ? "VALID" : "CROSS-ROLE VIOLATION"}`);
+  }
+}
