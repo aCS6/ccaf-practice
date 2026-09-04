@@ -1,0 +1,101 @@
+Running chapter-2/excercise-3/task-1.py ...
+=== Step-1 & 2: Agent Tool Scoping ===
+
+[web_search] — Finds and retrieves web content
+  • search_web
+  • load_document
+  • extract_links
+  • save_snippet
+  Total: 4 tools
+
+[document_analysis] — Analyses document structure and content
+  • extract_metadata
+  • extract_data_points
+  • summarise_content
+  • verify_claim
+  Total: 4 tools
+
+[synthesis] — Compiles findings into reports
+  • compile_report
+  • format_citation
+  • assess_coverage
+  • verify_fact (scoped cross-role)
+  Total: 4 tools
+
+✅ No unintended cross-role tool duplicates — scoping is clean.
+
+=== Step-3: Forced extract_metadata on Document Analysis Agent ===
+
+  Analysing document: doc-mcp-spec-v2
+    [TOOL] [FORCED] extract_metadata({'document_id': 'doc-mcp-spec-v2'})
+    [TOOL] extract_data_points({'document_id': 'doc-mcp-spec-v2', 'fields': ['dates', 'amounts', 'names', 'statistics', 'key entities']})
+    [TOOL] summarise_content({'document_id': 'doc-mcp-spec-v2', 'max_words': 150})
+    [DONE] **MCP Specification v2.1** — technical spec by MCP Working Group (2024-03-15)
+
+**Key data points:**
+- Versions covered: 
+
+  First tool called: extract_metadata
+  ✅ extract_metadata was enforced as first step.
+
+=== Step-4: Constrained load_document URL Validation ===
+
+  ✅ https://docs.internal.com/specs/mcp-v2.pdf
+     → [Mock document content from https://docs.internal.com/specs/mcp-v2.pdf]
+
+  ✅ https://wiki.company.com/guide.md
+     → [Mock document content from https://wiki.company.com/guide.md]
+
+  ❌ https://evil.com/malware.pdf
+     → Rejected: 'evil.com' is not a trusted domain. Allowed: docs.internal.com, specs.example.org, wiki.company.com.
+
+  ❌ https://docs.internal.com/page
+     → Rejected: 'https://docs.internal.com/page' has unsupported extension ''. Allowed: .docx, .html, .md, .pdf, .txt.
+
+  ❌ https://docs.internal.com/data.csv
+     → Rejected: 'https://docs.internal.com/data.csv' has unsupported extension '.csv'. Allowed: .docx, .html, .md, .pdf, .txt.
+
+
+=== Step-5: End-to-End Multi-Agent Test ===
+
+  Query: Research the latest MCP specification changes and compile a summary report.
+
+
+  --- web_search agent ---
+    [web_search] → search_web({'query': 'Model Context Protocol MCP specification latest changes 2025'})
+    [web_search] → search_web({'query': 'MCP specification changelog revision updates'})
+    [web_search] → search_web({'query': 'MCP 2025-06-18 specification new features authorization'})
+    [web_search] → search_web({'query': 'Model Context Protocol elicitation structured tool output specification'})
+
+  --- document_analysis agent ---
+
+  Analysing document: doc-mcp-spec-v2
+    [TOOL] [FORCED] extract_metadata({'document_id': 'doc-mcp-spec-v2'})
+    [TOOL] extract_data_points({'document_id': 'doc-mcp-spec-v2', 'fields': ['dates', 'names', 'key_entities', 'statistics']})
+    [TOOL] summarise_content({'document_id': 'doc-mcp-spec-v2', 'max_words': 200})
+    [TOOL] verify_claim({'claim': 'MCP v2.1 introduces 3 breaking changes from v2.0', 'document_id': 'doc-mcp-spec-v2'})
+    [TOOL] verify_claim({'claim': 'MCP v2.1 adds tool scoping, structured errors, and multi-agent coordination primitives', 'document_id': 'doc-mcp-spec-v2'})
+    [DONE] # MCP Specification Summary Report
+
+**Document:** MCP Specification v2.1
+**Author:** MCP Working Group
+**Released:** 202
+
+  --- synthesis agent ---
+
+============================================================
+CROSS-ROLE VIOLATION CHECK
+============================================================
+  ✅ VALID                   [web_search] called search_web
+  ✅ VALID                   [web_search] called search_web
+  ✅ VALID                   [web_search] called search_web
+  ✅ VALID                   [web_search] called search_web
+  ✅ VALID                   [document_analysis] called extract_metadata
+  ✅ VALID                   [document_analysis] called extract_data_points
+  ✅ VALID                   [document_analysis] called summarise_content
+  ✅ VALID                   [document_analysis] called verify_claim
+  ✅ VALID                   [document_analysis] called verify_claim
+
+  Total tool calls: 9
+  Violations: 0
+  ✅ All tool calls within role scope.

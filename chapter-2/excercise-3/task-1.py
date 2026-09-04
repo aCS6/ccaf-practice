@@ -297,7 +297,7 @@ def run_document_analysis_agent(document_id: str, user_query: str) -> list[dict]
 
         response = client.messages.create(
             model=MODEL,
-            max_tokens=1024,
+            max_tokens=4096,  # increased — verify_claim loops were hitting 1024
             tools=DOCUMENT_ANALYSIS_TOOLS,
             tool_choice=tool_choice,
             messages=messages,
@@ -451,3 +451,91 @@ if __name__ == "__main__":
         status = "✅" if not result["isError"] else "❌"
         msg = result.get("content", result.get("message", ""))
         print(f"  {status} {url}\n     → {msg}\n")
+
+    print("\n=== Step-5: End-to-End Multi-Agent Test ===")
+    QUERY = "Research the latest MCP specification changes and compile a summary report."
+    print(f"\n  Query: {QUERY}\n")
+
+    full_log: list[dict] = []
+
+    # Build allowed tool set per agent for violation detection
+    allowed_tools: dict[str, set[str]] = {
+        agent: {t["name"] for t in config["tools"]}
+        for agent, config in AGENT_TOOLSETS.items()
+    }
+
+    def run_agent(agent_name: str, query: str) -> list[dict]:
+        """Run a single agent with its scoped tools and log every tool call."""
+        config = AGENT_TOOLSETS[agent_name]
+        tools  = config["tools"]
+
+        # document_analysis uses forced first-turn selection
+        if agent_name == "document_analysis":
+            return run_document_analysis_agent("doc-mcp-spec-v2", query)
+
+        messages: list[anthropic.types.MessageParam] = [
+            {"role": "user", "content": query}
+        ]
+        log: list[dict] = []
+        max_iterations = 5  # cap to prevent runaway loops
+        system = (
+            "You are a research synthesis agent. "
+            "You MUST use your tools to compile the report. "
+            "Start by calling assess_coverage, then compile_report, then format_citation."
+        ) if agent_name == "synthesis" else None
+
+        for _ in range(max_iterations):
+            create_kwargs: dict = {
+                "model":       MODEL,
+                "max_tokens":  1024,
+                "tools":       tools,
+                "tool_choice": {"type": "auto"},
+                "messages":    messages,
+            }
+            if system:
+                create_kwargs["system"] = system
+            response = client.messages.create(**create_kwargs)
+
+            if response.stop_reason == "tool_use":
+                tool_results: list[anthropic.types.ToolResultBlockParam] = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        print(f"    [{agent_name}] → {block.name}({block.input})")
+                        log.append({"agent": agent_name, "tool": block.name})
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": f"Mock result for {block.name}",
+                        })
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": tool_results})  # type: ignore[arg-type]
+
+            elif response.stop_reason == "end_turn":
+                break
+            else:
+                break
+
+        return log
+
+    for agent_name in ["web_search", "document_analysis", "synthesis"]:
+        print(f"\n  --- {agent_name} agent ---")
+        agent_log = run_agent(agent_name, QUERY)
+        full_log.extend(agent_log)
+
+    # Verify no cross-role violations
+    print(f"\n{'='*60}")
+    print("CROSS-ROLE VIOLATION CHECK")
+    print(f"{'='*60}")
+    violations = 0
+    for entry in full_log:
+        agent   = entry["agent"]
+        tool    = entry["tool"]
+        valid   = tool in allowed_tools[agent]
+        status  = "✅ VALID" if valid else "❌ CROSS-ROLE VIOLATION"
+        if not valid:
+            violations += 1
+        print(f"  {status:<25} [{agent}] called {tool}")
+
+    print(f"\n  Total tool calls: {len(full_log)}")
+    print(f"  Violations: {violations}")
+    print(f"  {'✅ All tool calls within role scope.' if violations == 0 else '❌ Cross-role misuse detected — review agent tool assignments.'}")
