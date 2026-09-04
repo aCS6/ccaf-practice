@@ -54,5 +54,28 @@ async def test_step4_resource() -> None:
 
             print("\n  ✅ Resource read via MCP protocol — no direct import needed.")
 
+            # ── Step-5: List tools and call query_table ───────────────────────
+            print("\n=== Step-5: Enhanced Tool Description ===\n")
+
+            tools = await session.list_tools()
+            print(f"  Tools available: {len(tools.tools)}")
+            for t in tools.tools:
+                # Print full description so we can see it's rich, not sparse
+                print(f"\n  Tool: {t.name}")
+                print(f"  Description:\n    {t.description}")
+
+            # Call query_table with a SELECT
+            print("\n  Calling query_table('SELECT * FROM customers')...")
+            result = await session.call_tool(
+                "query_table",
+                {"sql": "SELECT * FROM customers"},
+            )
+            rows = json.loads(result.content[0].text)  # type: ignore[union-attr]
+            print(f"  Rows returned: {len(rows)}")
+            for row in rows:
+                print(f"    {row}")
+
+            print("\n  ✅ Tool called via MCP protocol — structured JSON rows returned.")
+
 
 asyncio.run(test_step4_resource())

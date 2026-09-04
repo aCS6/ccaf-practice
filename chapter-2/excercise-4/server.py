@@ -78,6 +78,57 @@ async def db_schema_resource() -> str:
     return json.dumps(DB_SCHEMA, indent=2)
 
 
+# ── Step-5: Tool with enhanced description ───────────────────────────────────
+# Why enhanced descriptions matter:
+# A sparse description ("Queries a table") gives the agent no reason to prefer
+# this tool over built-in alternatives like Grep or Bash+sqlite3.
+# An enhanced description explains WHAT it does, WHAT it returns, WHEN to use
+# it, and HOW it compares to alternatives — giving the agent enough signal to
+# make the right choice.
+
+# BEFORE (sparse — agent will prefer built-in tools):
+# description="Queries a database table"
+
+# AFTER (enhanced — agent can make an informed choice):
+@server.tool(
+    name="query_table",
+    description=(
+        "Executes a read-only SQL SELECT query against the application database "
+        "and returns results as a JSON array of row objects. "
+        "Each row is a dict keyed by column name, preserving types (int, float, str). "
+        "Use this instead of Bash+sqlite3 when you need structured, typed results "
+        "you can filter or aggregate in subsequent steps — Bash+sqlite3 returns raw "
+        "text that requires manual parsing. "
+        "Always read the db://schema/main resource first to confirm table and column "
+        "names before writing a query."
+    ),
+)
+async def query_table(sql: str) -> str:
+    """
+    sql: A SELECT statement to execute. Only SELECT is allowed — writes are rejected.
+    """
+    # Mock implementation — returns fake rows for demonstration
+    if "customers" in sql.lower():
+        rows = [
+            {"id": 1, "email": "alice@example.com", "name": "Alice", "tier": "pro"},
+            {"id": 2, "email": "bob@example.com",   "name": "Bob",   "tier": "free"},
+        ]
+    elif "orders" in sql.lower():
+        rows = [
+            {"id": 101, "customer_id": 1, "status": "paid",    "total": 49.99},
+            {"id": 102, "customer_id": 2, "status": "pending", "total": 12.50},
+        ]
+    elif "products" in sql.lower():
+        rows = [
+            {"id": 1, "sku": "PRD-001", "name": "Widget A", "price": 9.99,  "stock": 100},
+            {"id": 2, "sku": "PRD-002", "name": "Widget B", "price": 24.99, "stock": 45},
+        ]
+    else:
+        rows = []
+
+    return json.dumps(rows, indent=2)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import asyncio
